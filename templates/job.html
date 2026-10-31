@@ -1,0 +1,133 @@
+{% extends 'base.html' %}
+{% block title %}Validation job{% endblock %}
+{% block content %}
+<main class="wrap">
+  <div class="section-head">
+    <div>
+      <div class="eyebrow">Validation job</div>
+      <h1 style="overflow-wrap:anywhere">{{ job.filename }}</h1>
+      <p class="muted" style="margin:5px 0 0">{{ job.total }}টি email · Created {{ job.created_at[:16].replace('T',' ') }} UTC</p>
+    </div>
+    <a class="btn secondary" href="{{ url_for('dashboard') }}">← Dashboard</a>
+  </div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:15px">
+      <div><strong id="statusText">{{ job.status }}</strong><div class="muted" id="countText">{{ job.completed }} / {{ job.total }} completed</div></div>
+      <strong id="percent">{{ ((job.completed/job.total)*100)|int if job.total else 0 }}%</strong>
+    </div>
+    <div class="progress"><div id="bar" style="width:{{ ((job.completed/job.total)*100)|int if job.total else 0 }}%"></div></div>
+    <div id="message" class="muted" style="font-size:13px">
+      {% if job.status=='ready' %}{{ job.total }}টি email পাওয়া গেছে। Validation শুরু করতে নিচের button-এ click করুন।
+      {% elif job.status=='queued' %}{{ job.total }}টি email queue-তে আছে। অন্য list চললে সেটি শেষ হলে validation শুরু হবে।
+      {% elif job.status=='completed' %}Validation সম্পন্ন। এখন export করতে পারবেন।
+      {% elif job.status=='cancelled' %}Validation বাতিল করা হয়েছে। ইতিমধ্যে completed হওয়া ফলাফল export করতে পারবেন; pending email-গুলো আর process হবে না।
+      {% elif job.status=='cancelling' %}বাতিলের অনুরোধ করা হয়েছে। চলমান DNS/SMTP request শেষ হলেই validation থামবে।
+      {% elif job.status in ['failed','interrupted'] %}{{ job.error or 'Job সম্পন্ন হয়নি।' }}
+      {% else %}Validation চলছে—এই পেজটি খোলা রাখলে progress update হবে।{% endif %}
+    </div>
+    <form id="startForm" method="post" action="{{ url_for('start_job',job_id=job.id) }}" style="display:{{ 'block' if job.status=='ready' else 'none' }};margin-top:18px">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn" type="submit">Start validation · {{ job.total }} emails</button>
+    </form>
+    <form id="cancelForm" method="post" action="{{ url_for('cancel_job',job_id=job.id) }}" style="display:{{ 'block' if job.status in ['queued','running'] else 'none' }};margin-top:18px" onsubmit="return confirm('চলমান list validation বাতিল করতে চান?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn secondary" type="submit">Cancel validation</button>
+    </form>
+    <div id="exports" style="display:{{ 'flex' if summary.completed_results > 0 and job.status in ['completed','cancelled','failed','interrupted'] else 'none' }};gap:10px;flex-wrap:wrap;margin-top:18px">
+      <a class="btn" href="{{ url_for('export_job',job_id=job.id,fmt='csv') }}">Download CSV</a>
+      <a class="btn secondary" href="{{ url_for('export_job',job_id=job.id,fmt='xlsx') }}">Download XLSX</a>
+    </div>
+  </div>
+  <div class="card" style="margin-top:20px">
+    <div class="section-head"><h2>Validation summary</h2><span class="muted" id="summaryBasis" style="font-size:12px">Completed results-এর মধ্যে শতাংশ</span></div>
+    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px">
+      <div class="stat-card" style="padding:14px;border:1px solid var(--border,#ddd);border-radius:12px"><div class="muted">Likely Valid</div><div id="likelyCount" style="font-size:26px;font-weight:700">{{ summary.counts['Likely Valid'] }}</div><div class="muted" id="likelyPct">{{ summary.percentages['Likely Valid'] }}%</div></div>
+      <div class="stat-card" style="padding:14px;border:1px solid var(--border,#ddd);border-radius:12px"><div class="muted">Unknown</div><div id="unknownCount" style="font-size:26px;font-weight:700">{{ summary.counts['Unknown'] }}</div><div class="muted" id="unknownPct">{{ summary.percentages['Unknown'] }}%</div></div>
+      <div class="stat-card" style="padding:14px;border:1px solid var(--border,#ddd);border-radius:12px"><div class="muted">Catch All</div><div id="catchallCount" style="font-size:26px;font-weight:700">{{ summary.counts['Catch All'] }}</div><div class="muted" id="catchallPct">{{ summary.percentages['Catch All'] }}%</div></div>
+      <div class="stat-card" style="padding:14px;border:1px solid var(--border,#ddd);border-radius:12px"><div class="muted">Invalid</div><div id="invalidCount" style="font-size:26px;font-weight:700">{{ summary.counts['Invalid'] }}</div><div class="muted" id="invalidPct">{{ summary.percentages['Invalid'] }}%</div></div>
+    </div>
+    <p class="muted" id="summaryCompleted" style="font-size:12px;margin-bottom:0">{{ summary.completed_results }}টি result তৈরি হয়েছে। Pending email এই শতাংশের মধ্যে গণনা করা হয়নি।</p>
+  </div>
+  <div class="card" style="margin-top:20px">
+    <div class="section-head"><h2>Result preview</h2><span class="muted" id="recentCaption" style="font-size:12px">Page {{ initial_page }} of {{ total_pages }} · {{ total_results }}টি validated result</span></div>
+    <div class="table-wrap" style="height:440px;min-height:440px;max-height:440px;overflow:auto;width:100%;"><table style="width:100%;table-layout:fixed;border-collapse:collapse;"><thead><tr>{% for h in headers %}<th title="{{ h }}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ h }}</th>{% endfor %}</tr></thead><tbody id="recentResultsBody">{% for row in preview %}<tr>{% for h in headers %}<td title="{{ row.get(h,'') }}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ row.get(h,'') }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+    <p class="muted" id="recentEmpty" style="{% if preview %}display:none;{% else %}display:block;{% endif %}">Validation result তৈরি হলে এখানে page by page দেখা যাবে।</p>
+    <nav id="pagination" aria-label="Result pages" style="display:flex;justify-content:center;align-items:center;gap:6px;flex-wrap:wrap;margin-top:16px"></nav>
+  </div>
+</main>
+<script>
+const statusUrl={{ url_for('job_status',job_id=job.id)|tojson }};
+const terminal=['ready','completed','cancelled','failed','interrupted'];
+const resultHeaders={{ headers|tojson }};
+let currentPage={{ initial_page }};
+let totalPages={{ total_pages }};
+let totalResults={{ total_results }};
+function renderRows(rows){
+  const body=document.getElementById('recentResultsBody'); body.replaceChildren();
+  for(const row of (rows||[]).slice(0,10)){
+    const tr=document.createElement('tr');
+    for(const header of resultHeaders){const td=document.createElement('td');const value=String(row?.[header] ?? '');td.textContent=value;td.title=value;td.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';tr.appendChild(td);}
+    body.appendChild(tr);
+  }
+  document.getElementById('recentEmpty').style.display=(rows&&rows.length)?'none':'block';
+}
+function pageButton(label,page,disabled=false,active=false,aria=''){
+  const b=document.createElement('button'); b.type='button'; b.textContent=label; b.disabled=disabled;
+  b.setAttribute('aria-label',aria||('Page '+page));
+  b.style.cssText='min-width:34px;height:34px;padding:0 9px;border:1px solid var(--border,#ddd);border-radius:8px;background:'+(active?'var(--primary,#2563eb)':'var(--surface,#fff)')+';color:'+(active?'white':'inherit')+';cursor:'+(disabled?'default':'pointer')+';opacity:'+(disabled?'.45':'1');
+  if(!disabled)b.addEventListener('click',()=>loadPage(page,false));
+  return b;
+}
+function renderPagination(){
+  const nav=document.getElementById('pagination'); nav.replaceChildren();
+  const maxVisible=10;
+  let start=Math.max(1,Math.min(currentPage-Math.floor(maxVisible/2),totalPages-maxVisible+1));
+  let end=Math.min(totalPages,start+maxVisible-1);
+  nav.appendChild(pageButton('‹',Math.max(1,currentPage-1),currentPage<=1,false,'Previous page'));
+  for(let p=start;p<=end;p++)nav.appendChild(pageButton(String(p),p,false,p===currentPage));
+  nav.appendChild(pageButton('›',Math.min(totalPages,currentPage+1),currentPage>=totalPages,false,'Next page'));
+  document.getElementById('recentCaption').textContent=`Page ${currentPage} of ${totalPages} · ${totalResults}টি validated result · প্রতি page-এ সর্বোচ্চ ১০টি`;
+}
+async function loadPage(page){
+  try{
+    const r=await fetch(statusUrl+'?page='+encodeURIComponent(page),{headers:{'Accept':'application/json'}}); if(!r.ok)return null;
+    const d=await r.json(); totalPages=d.total_pages||1; totalResults=d.total_results||0;
+    currentPage=Math.min(Math.max(1,d.page||page),totalPages);
+    renderRows(d.page_results||[]);renderPagination();return d;
+  }catch(e){return null}
+}
+async function poll(){
+  try{
+    const r=await fetch(statusUrl+'?page='+encodeURIComponent(currentPage),{headers:{'Accept':'application/json'}}); if(!r.ok)return;
+    const d=await r.json();
+    document.getElementById('statusText').textContent=d.status;
+    document.getElementById('countText').textContent=`${d.completed} / ${d.total} completed`;
+    document.getElementById('percent').textContent=`${d.progress}%`;
+    document.getElementById('bar').style.width=`${d.progress}%`;
+    totalPages=d.total_pages||1; totalResults=d.total_results||0;
+    // Keep the user's selected page; new results create pages without forcing navigation to the last page.
+    currentPage=Math.min(currentPage,totalPages);
+    let pageData=d;
+    if((d.page||1)!==currentPage){const pr=await fetch(statusUrl+'?page='+currentPage,{headers:{'Accept':'application/json'}});if(pr.ok)pageData=await pr.json();}
+    renderRows(pageData.page_results||[]);renderPagination();
+    const counts=d.counts||{}; const pcts=d.percentages||{};
+    for (const [key,id] of [['Likely Valid','likely'],['Catch All','catchall'],['Unknown','unknown'],['Invalid','invalid']]) {
+      document.getElementById(id+'Count').textContent=counts[key]||0;
+      document.getElementById(id+'Pct').textContent=`${pcts[key]||0}%`;
+    }
+    document.getElementById('summaryCompleted').textContent=`${d.completed_results||0}টি result তৈরি হয়েছে। Pending email এই শতাংশের মধ্যে গণনা করা হয়নি।`;
+    if ((d.completed_results||0)>0 && ['completed','cancelled','failed','interrupted'].includes(d.status)) document.getElementById('exports').style.display='flex';
+    document.getElementById('cancelForm').style.display=['queued','running'].includes(d.status)?'block':'none';
+    if(d.status==='cancelling') document.getElementById('message').textContent='বাতিলের অনুরোধ করা হয়েছে। চলমান DNS/SMTP request শেষ হলেই validation থামবে।';
+    else if(d.status==='cancelled') document.getElementById('message').textContent='Validation বাতিল করা হয়েছে। pending email-গুলো আর process হবে না।';
+    else if(d.status==='completed'){
+      document.getElementById('message').textContent='Validation সম্পন্ন। এখন export করতে পারবেন.';
+      document.getElementById('exports').style.display='flex';
+    } else if(['failed','interrupted'].includes(d.status)) document.getElementById('message').textContent=d.error||'Job সম্পন্ন হয়নি।';
+    if(terminal.includes(d.status)) { window._finished=true; }
+    else setTimeout(poll,1500);
+  }catch(e){setTimeout(poll,4000)}
+}
+renderPagination();
+if(['queued','running','cancelling'].includes({{ job.status|tojson }}))setTimeout(poll,700);
+else loadPage(currentPage,false);
+</script>
+{% endblock %}
