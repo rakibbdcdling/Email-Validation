@@ -1,0 +1,48 @@
+আপডেট নোট:
+
+ওয়েবসাইটের Result Preview এবং CSV/XLSX Export এখন একই ৬টি কলাম দেখায়:
+1. Email
+2. Status
+3. My Sub Status
+4. My MX Record
+5. My SMTP Provider
+6. SMTP Response
+
+SMTP Response-এ সার্ভারের numeric code (যেমন 250, 550, 451) এবং পাওয়া গেলে server response text দেখানো হয়। My SMTP Provider MX hostname দেখে অনুমান করা হয়; এটি best-effort classification, শতভাগ provider verification নয়।
+
+আগের DNS, MX, SMTP, EHLO/HELO, STARTTLS, MAIL FROM, RCPT TO, alternate MX এবং catch-all probing logic রাখা হয়েছে। নতুন My Sub Status-এ role_based, catch_all, temporary_smtp_failure, smtp_rejected_unconfirmed, smtp_unreachable_or_blocked ইত্যাদি কারণ দেখানো হয়।
+
+গুরুত্বপূর্ণ: ZeroBounce-এর proprietary algorithm, private reputation database বা mailbox intelligence হুবহু নকল করা সম্ভব নয়। এখানে public DNS ও SMTP response দিয়ে অনুরূপ output format এবং conservative classification যোগ করা হয়েছে। শুধু 550 response দেখে mailbox নিশ্চিতভাবে নেই বলা হয় না।
+
+Test চালাতে:
+python -m unittest discover -s tests
+
+ইনস্টল:
+pip install -r requirements.txt
+python app.py
+
+পুরোনো instance/app.db থাকলে সেটি অক্ষত রাখুন; নতুন ZIP দিয়ে replace করার সময় database overwrite করবেন না।
+
+
+নতুন 550 classification:
+- শুধু 550 দেখেই Invalid করা হবে না।
+- Target RCPT-তে 550 পাওয়ার পর একই SMTP session-এ random recipient পরীক্ষা করা হবে।
+- Random recipient 250/251/252 গ্রহণ করে এবং target response-এ 5.1.1 বা স্পষ্ট mailbox/user-not-found বার্তা থাকলে Invalid / mailbox_not_found হবে।
+- Target 550 হলেও random recipient-ও reject হলে, অথবা 550 policy/security/spam/sender-block response হলে Unknown হবে।
+- Target ও random recipient দুটোই গ্রহণ করলে Catch All হবে; শুধু target 550 থেকে Catch All অনুমান করা হবে না।
+- 4xx, timeout, greylisting ও অস্পষ্ট 5xx Unknown থাকবে; প্রয়োজনে alternate MX পরীক্ষা হবে।
+- EHLO/MAIL FROM-এর 550 কখনো mailbox Invalid হিসেবে গণ্য হবে না।
+
+এতে False Invalid কমানোর জন্য conservative logic ব্যবহার করা হয়েছে।
+
+
+নতুন Reliability Update (31 Oct 2026):
+- পুরোনো email_engine.py-তে SMTP timeout ছিল ৮ সেকেন্ড এবং configured MAIL FROM sender ব্যবহার করা হতো; নতুন validator-এ timeout ৬ সেকেন্ড ও null reverse-path ছিল। এটি কিছু MX server-এ RCPT acceptance কমিয়ে দিতে পারে।
+- বর্তমান Engine-এ SMTP timeout ১২ সেকেন্ড, DNS timeout ৬ সেকেন্ড করা হয়েছে।
+- Temporary connection/4xx error হলে একই MX-এ সর্বোচ্চ ২ বার retry হবে; এরপর preference order অনুযায়ী সর্বোচ্চ ৩টি MX পরীক্ষা হবে।
+- SMTP concurrency ২ এবং email worker ৩ করা হয়েছে, যাতে provider rate-limit/greylisting কম হয়।
+- MAIL FROM-এর জন্য নিজের নিয়ন্ত্রণাধীন envelope sender optional `SMTP_MAIL_FROM` environment variable দিয়ে দেওয়া যাবে; না দিলে RFC null sender `<>` থাকবে। অন্যের address spoof করা যাবে না।
+- Catch-all random recipient control domain+MX অনুযায়ী ৬ ঘণ্টা cache হয়; প্রতিটি email-এর জন্য বারবার random recipient probe করা হয় না।
+- Target RCPT 250/251 হলে Likely Valid; random recipient-ও গ্রহণ করলে Catch All। Target 550 শুধু স্পষ্ট mailbox-not-found (যেমন 5.1.1) এবং একই MX-এ random recipient accepted হলে Invalid; অন্য 550 Unknown।
+- SMTP DATA বা verification email পাঠানো হয় না।
+- Automated test: ১২টি test passed.
